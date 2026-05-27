@@ -273,4 +273,26 @@ export default function CanvasQuizAnalyzer() {
           <button
             onClick={() => setAutoMode((prev) => !prev)}
             disabled={!streamReady}
-            className={`w-full py-4 font-bold text-lg rounded-2xl transition-all flex items-center ju
+            className={`w-full py-4 font-bold text-lg rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg disabled:opacity-40 ${
+              autoMode
+                ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-500/30'
+                : 'bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white shadow-blue-500/30'
+            }`}
+          >
+            {autoMode ? (
+              <>
+                <Square className="w-5 h-5" />
+                Stop
+              </>
+            ) : (
+              <>
+                <Zap className="w-5 h-5" />
+                Start Analyzing
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
