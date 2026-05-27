@@ -18,7 +18,9 @@ export default function CanvasQuizAnalyzer() {
   const [availableDevices, setAvailableDevices] = useState([]);
   const [nativeZoomRange, setNativeZoomRange] = useState(null);
 
+  // ── Start a camera stream by deviceId (or default back camera) ──────────────
   const startStream = useCallback(async (deviceId = null) => {
+    // Stop any existing stream
     if (currentStreamRef.current) {
       currentStreamRef.current.getTracks().forEach((t) => t.stop());
       currentStreamRef.current = null;
@@ -40,6 +42,7 @@ export default function CanvasQuizAnalyzer() {
       videoRef.current.style.transformOrigin = '';
     }
 
+    // Check native zoom capability
     const track = stream.getVideoTracks()[0];
     const caps = track.getCapabilities?.() || {};
     if (caps.zoom) {
@@ -53,12 +56,15 @@ export default function CanvasQuizAnalyzer() {
     return stream;
   }, []);
 
+  // ── Camera setup ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!cameraActive) return;
 
     const init = async () => {
       try {
         await startStream();
+
+        // Enumerate devices after we have permission
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter((d) => d.kind === 'videoinput');
         setAvailableDevices(videoDevices);
@@ -79,12 +85,14 @@ export default function CanvasQuizAnalyzer() {
     };
   }, [cameraActive, startStream]);
 
+  // ── Zoom handler ──────────────────────────────────────────────────────────────
   const changeZoom = useCallback(
     async (newZoom) => {
       if (!videoRef.current?.srcObject) return;
 
       const track = videoRef.current.srcObject.getVideoTracks()[0];
 
+      // 1. Try native MediaTrack zoom (works on many Android devices)
       if (nativeZoomRange && newZoom >= nativeZoomRange.min && newZoom <= nativeZoomRange.max) {
         try {
           await track.applyConstraints({ advanced: [{ zoom: newZoom }] });
@@ -96,22 +104,30 @@ export default function CanvasQuizAnalyzer() {
         }
       }
 
+      // 2. For 0.5x: try to find the ultrawide camera by label
       if (newZoom === 0.5 && availableDevices.length > 1) {
         const ultrawide = availableDevices.find((d) => {
           const label = d.label.toLowerCase();
-          return label.includes('ultra') || label.includes('wide') || label.includes('0.5') || label.includes('back, 0');
+          return (
+            label.includes('ultra') ||
+            label.includes('wide') ||
+            label.includes('0.5') ||
+            label.includes('back, 0')
+          );
         });
+
         if (ultrawide) {
           try {
             await startStream(ultrawide.deviceId);
             setZoomLevel(0.5);
             return;
           } catch {
-            // fall through
+            // fall through to CSS
           }
         }
       }
 
+      // 3. For 1x: reset to default back camera
       if (newZoom === 1) {
         try {
           await startStream();
@@ -122,8 +138,10 @@ export default function CanvasQuizAnalyzer() {
         }
       }
 
+      // 4. CSS transform fallback — works everywhere, uses digital zoom
       if (videoRef.current) {
-        videoRef.current.style.transform = newZoom !== 1 ? `scale(${newZoom})` : '';
+        const scale = newZoom;
+        videoRef.current.style.transform = scale !== 1 ? `scale(${scale})` : '';
         videoRef.current.style.transformOrigin = 'center center';
       }
       setZoomLevel(newZoom);
@@ -131,6 +149,7 @@ export default function CanvasQuizAnalyzer() {
     [nativeZoomRange, availableDevices, startStream]
   );
 
+  // ── Capture a frame ───────────────────────────────────────────────────────────
   const captureImage = () => {
     if (!videoRef.current || !canvasRef.current) return null;
     const canvas = canvasRef.current;
@@ -141,6 +160,7 @@ export default function CanvasQuizAnalyzer() {
     return canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
   };
 
+  // ── Single analysis pass ──────────────────────────────────────────────────────
   const runAnalysis = useCallback(async () => {
     if (analyzingRef.current) return;
     const imageData = captureImage();
@@ -178,6 +198,7 @@ export default function CanvasQuizAnalyzer() {
     }
   }, []);
 
+  // ── Auto-analyze loop ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!autoMode || !streamReady) return;
     let cancelled = false;
@@ -193,6 +214,7 @@ export default function CanvasQuizAnalyzer() {
     return () => { cancelled = true; };
   }, [autoMode, streamReady, runAnalysis]);
 
+  // ── Stop everything ───────────────────────────────────────────────────────────
   const stopCamera = () => {
     setAutoMode(false);
     setCameraActive(false);
@@ -201,6 +223,7 @@ export default function CanvasQuizAnalyzer() {
     setZoomLevel(1);
   };
 
+  // ── Landing screen ─────────────────────────────────────────────────────────────
   if (!cameraActive) {
     return (
       <>
@@ -242,94 +265,68 @@ export default function CanvasQuizAnalyzer() {
     );
   }
 
+  // ── Camera screen ──────────────────────────────────────────────────────────────
   return (
     <>
       <Head>
         <title>Canvas Quiz AI</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
-      <div className="min-h-screen bg-black flex flex-col">
+      <div className="fixed inset-0 bg-black overflow-hidden">
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-full object-cover transition-transform duration-200"
+        />
+        <canvas ref={canvasRef} className="hidden" />
 
-        {/* Camera section */}
-        <div className="relative flex-1" style={{ minHeight: '40vh' }}>
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-cover"
-            style={{ display: 'block' }}
-          />
-          <canvas ref={canvasRef} className="hidden" />
-
-          {/* Top bar */}
-          <div className="absolute top-0 left-0 right-0 flex items-center justify-between p-3">
-            <div className="bg-black/60 backdrop-blur-md px-3 py-2 rounded-xl flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${autoMode ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
-              <span className="text-white text-xs font-semibold">
-                {autoMode ? (analyzing ? 'Scanning…' : 'Auto') : 'Standby'}
-              </span>
-              {analyzing && <Loader className="w-3 h-3 text-blue-400 animate-spin" />}
-            </div>
-
-            {/* Zoom + X */}
-            <div className="flex items-center gap-2">
-              {[0.5, 1, 2].map((z) => (
-                <button
-                  key={z}
-                  onClick={() => changeZoom(z)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
-                    zoomLevel === z
-                      ? 'bg-yellow-400 text-black shadow-lg shadow-yellow-400/40'
-                      : 'bg-black/60 backdrop-blur-md text-white/80'
-                  }`}
-                >
-                  {z}x
-                </button>
-              ))}
-              <button
-                onClick={stopCamera}
-                className="bg-black/60 backdrop-blur-md text-white p-2 rounded-xl ml-1"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+        {/* Top bar */}
+        <div className="absolute top-0 left-0 right-0 flex justify-between items-center p-4">
+          <div className="bg-black/60 backdrop-blur-md px-3 py-2 rounded-xl flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${autoMode ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
+            <span className="text-white text-xs font-semibold">
+              {autoMode ? (analyzing ? 'Scanning…' : 'Auto') : 'Standby'}
+            </span>
+            {analyzing && <Loader className="w-3 h-3 text-blue-400 animate-spin" />}
           </div>
-
-          {/* Start / Stop */}
-          <div className="absolute bottom-0 left-0 right-0 p-3">
-            <button
-              onClick={() => setAutoMode((prev) => !prev)}
-              disabled={!streamReady}
-              className={`w-full py-3 font-bold text-base rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg disabled:opacity-40 ${
-                autoMode
-                  ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-500/30'
-                  : 'bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white shadow-blue-500/30'
-              }`}
-            >
-              {autoMode ? (
-                <><Square className="w-4 h-4" />Stop</>
-              ) : (
-                <><Zap className="w-4 h-4" />Start Analyzing</>
-              )}
-            </button>
-          </div>
+          <button onClick={stopCamera} className="bg-black/60 backdrop-blur-md text-white p-2.5 rounded-xl">
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* Answer panel */}
-        <div className="bg-slate-900 overflow-y-auto" style={{ maxHeight: '55vh' }}>
-          {currentAnswer ? (
-            <div className="p-4">
+        {/* Zoom controls */}
+        <div className="absolute top-16 left-0 right-0 flex justify-center gap-2 px-4">
+          {[0.5, 1, 2].map((z) => (
+            <button
+              key={z}
+              onClick={() => changeZoom(z)}
+              className={`px-4 py-1.5 rounded-full text-sm font-bold transition-all ${
+                zoomLevel === z
+                  ? 'bg-yellow-400 text-black shadow-lg shadow-yellow-400/40'
+                  : 'bg-black/50 backdrop-blur-md text-white/80 hover:bg-black/70'
+              }`}
+            >
+              {z}x
+            </button>
+          ))}
+        </div>
+
+        {/* Answer overlay */}
+        {currentAnswer && (
+          <div className="absolute left-4 right-4 bottom-28">
+            <div className="bg-black/80 backdrop-blur-xl rounded-2xl p-4 border border-white/10 shadow-2xl">
               <div className="flex items-center gap-4 mb-3">
-                <div className="w-16 h-16 bg-green-500 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg shadow-green-500/30">
+                <div className="w-16 h-16 bg-green-500 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg shadow-green-500/40">
                   <span className="text-white text-3xl font-black">{currentAnswer.letter}</span>
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-green-400 text-xs font-bold uppercase tracking-wider mb-0.5">Correct Answer</p>
-                  <p className="text-white/70 text-sm leading-relaxed">{currentAnswer.questionText}</p>
+                  <p className="text-white/70 text-xs leading-relaxed line-clamp-2">{currentAnswer.questionText}</p>
                 </div>
               </div>
-              <p className="text-white/60 text-sm leading-relaxed border-t border-white/10 pt-3">
+              <p className="text-white/60 text-xs leading-relaxed border-t border-white/10 pt-3">
                 {currentAnswer.reasoning}
               </p>
               {currentAnswer.all && currentAnswer.all.length > 1 && (
@@ -342,19 +339,44 @@ export default function CanvasQuizAnalyzer() {
                 </div>
               )}
             </div>
-          ) : (
-            <div className="p-6 text-center">
-              {error ? (
-                <p className="text-red-400 text-sm">{error}</p>
-              ) : autoMode && analyzing ? (
-                <p className="text-slate-400 text-sm">Analyzing…</p>
-              ) : autoMode ? (
-                <p className="text-slate-500 text-sm">Point camera at a question…</p>
-              ) : (
-                <p className="text-slate-600 text-sm">Press Start Analyzing to begin</p>
-              )}
+          </div>
+        )}
+
+        {/* No result nudge */}
+        {!currentAnswer && autoMode && !analyzing && (
+          <div className="absolute left-4 right-4 bottom-28">
+            <div className="bg-black/60 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-center">
+              <p className="text-white/50 text-sm">Point camera at a question…</p>
             </div>
-          )}
+          </div>
+        )}
+
+        {/* Error */}
+        {error && (
+          <div className="absolute left-4 right-4 bottom-28">
+            <div className="bg-red-500/20 border border-red-500/40 rounded-2xl px-4 py-3">
+              <p className="text-red-300 text-sm text-center">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Start/Stop */}
+        <div className="absolute bottom-0 left-0 right-0 p-4">
+          <button
+            onClick={() => setAutoMode((prev) => !prev)}
+            disabled={!streamReady}
+            className={`w-full py-4 font-bold text-lg rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg disabled:opacity-40 ${
+              autoMode
+                ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-500/30'
+                : 'bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white shadow-blue-500/30'
+            }`}
+          >
+            {autoMode ? (
+              <><Square className="w-5 h-5" />Stop</>
+            ) : (
+              <><Zap className="w-5 h-5" />Start Analyzing</>
+            )}
+          </button>
         </div>
       </div>
     </>
