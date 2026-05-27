@@ -1,38 +1,37 @@
-import { useState, useRef, useEffect } from 'react';
-import { Camera, Loader, X, Copy, Zap } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Camera, Loader, X, Zap, Square } from 'lucide-react';
 import Head from 'next/head';
 
 export default function CanvasQuizAnalyzer() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const analyzingRef = useRef(false);
+  const timeoutRef = useRef(null);
+
   const [cameraActive, setCameraActive] = useState(false);
+  const [autoMode, setAutoMode] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const [analysis, setAnalysis] = useState(null);
+  const [currentAnswer, setCurrentAnswer] = useState(null);
   const [error, setError] = useState('');
   const [streamReady, setStreamReady] = useState(false);
 
-  // Start camera stream when cameraActive flips to true
+  // ── Camera setup ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!cameraActive) return;
-
     let stream;
 
     const startCamera = async () => {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'environment',
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
         });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           setStreamReady(true);
           setError('');
         }
-      } catch (err) {
-        setError('Camera access denied. Please allow camera access and try again.');
+      } catch {
+        setError('Camera access denied. Allow camera and try again.');
         setCameraActive(false);
       }
     };
@@ -40,27 +39,29 @@ export default function CanvasQuizAnalyzer() {
     startCamera();
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
-      }
+      if (stream) stream.getTracks().forEach((t) => t.stop());
       setStreamReady(false);
     };
   }, [cameraActive]);
 
-  const captureAndAnalyze = async () => {
-    if (!videoRef.current || !canvasRef.current) return;
-
+  // ── Capture a frame as base64 jpeg ──────────────────────────────────────────
+  const captureImage = () => {
+    if (!videoRef.current || !canvasRef.current) return null;
     const canvas = canvasRef.current;
     const video = videoRef.current;
-    const ctx = canvas.getContext('2d');
-
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    return canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+  };
 
-    // Strip the data:image/jpeg;base64, prefix — send only the raw base64
-    const imageData = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+  // ── Single analysis pass ─────────────────────────────────────────────────────
+  const runAnalysis = useCallback(async () => {
+    if (analyzingRef.current) return;
+    const imageData = captureImage();
+    if (!imageData) return;
 
+    analyzingRef.current = true;
     setAnalyzing(true);
     setError('');
 
@@ -75,70 +76,95 @@ export default function CanvasQuizAnalyzer() {
 
       if (!res.ok) {
         setError(data.error || 'Analysis failed');
-        return;
+      } else if (data.questions && data.questions.length > 0) {
+        const primary = data.questions[0];
+        setCurrentAnswer({
+          letter: primary.suggestedAnswer,
+          reasoning: primary.reasoning,
+          questionText: primary.questionText,
+          all: data.questions.map((q) => ({
+            num: q.questionNumber,
+            letter: q.suggestedAnswer,
+          })),
+        });
       }
-
-      setAnalysis(data);
     } catch (err) {
       setError('Network error: ' + err.message);
     } finally {
+      analyzingRef.current = false;
       setAnalyzing(false);
     }
-  };
+  }, []);
 
+  // ── Auto-analyze loop: run, wait 2 s after response, run again ───────────────
+  useEffect(() => {
+    if (!autoMode || !streamReady) return;
+
+    let cancelled = false;
+
+    const loop = async () => {
+      while (!cancelled) {
+        await runAnalysis();
+        // wait 2 seconds between passes so the camera has time to move
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    };
+
+    loop();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [autoMode, streamReady, runAnalysis]);
+
+  // ── Stop everything ──────────────────────────────────────────────────────────
   const stopCamera = () => {
+    setAutoMode(false);
     setCameraActive(false);
-    setAnalysis(null);
+    setCurrentAnswer(null);
     setError('');
   };
 
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text).catch(() => {});
-  };
-
-  // ── Landing screen ──────────────────────────────────────────────────────────
+  // ── Landing screen ────────────────────────────────────────────────────────────
   if (!cameraActive) {
     return (
       <>
         <Head>
-          <title>Canvas Quiz Analyzer</title>
+          <title>Canvas Quiz AI</title>
           <meta name="viewport" content="width=device-width, initial-scale=1" />
         </Head>
 
-        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-slate-950 flex flex-col items-center justify-center px-4">
-          {/* Ambient blobs */}
-          <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-slate-950 flex flex-col items-center justify-center px-6">
+          <div className="fixed inset-0 pointer-events-none overflow-hidden">
             <div className="absolute top-0 right-0 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl" />
             <div className="absolute bottom-0 left-0 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl" />
           </div>
 
-          <div className="relative z-10 text-center max-w-md w-full">
-            <div className="mb-8">
-              <div className="inline-block p-4 bg-blue-500/20 rounded-2xl mb-4">
-                <Camera className="w-12 h-12 text-blue-400" />
-              </div>
-              <h1 className="text-4xl font-bold text-white mb-2">Canvas Quiz AI</h1>
-              <p className="text-slate-300">
-                Point your camera at your screen to analyze questions
-              </p>
+          <div className="relative z-10 text-center w-full max-w-sm">
+            <div className="inline-block p-5 bg-blue-500/20 rounded-3xl mb-6">
+              <Camera className="w-14 h-14 text-blue-400" />
             </div>
+            <h1 className="text-4xl font-black text-white mb-2 tracking-tight">Canvas Quiz AI</h1>
+            <p className="text-slate-400 mb-8 text-sm">
+              Point your camera at a quiz — answers appear instantly on screen.
+            </p>
 
             {error && (
-              <div className="mb-4 bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3">
+              <div className="mb-6 bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3">
                 <p className="text-red-300 text-sm">{error}</p>
               </div>
             )}
 
             <button
               onClick={() => setCameraActive(true)}
-              className="w-full py-4 px-6 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white font-semibold rounded-xl transition-all duration-300 hover:scale-105 flex items-center justify-center gap-2"
+              className="w-full py-4 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white font-bold rounded-2xl transition-all hover:scale-105 flex items-center justify-center gap-2 text-lg shadow-lg shadow-blue-500/25"
             >
               <Camera className="w-5 h-5" />
-              Start Camera
+              Open Camera
             </button>
 
-            <p className="mt-4 text-xs text-slate-500">
-              Make sure your phone camera faces your computer screen
+            <p className="mt-5 text-xs text-slate-600">
+              Requires camera permission · Works on any phone
             </p>
           </div>
         </div>
@@ -146,148 +172,105 @@ export default function CanvasQuizAnalyzer() {
     );
   }
 
-  // ── Camera + analysis screen ─────────────────────────────────────────────────
+  // ── Camera screen ─────────────────────────────────────────────────────────────
   return (
     <>
       <Head>
-        <title>Canvas Quiz AI — Live</title>
+        <title>Canvas Quiz AI</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
 
-      <div className="min-h-screen bg-black flex flex-col">
-        {/* Camera feed */}
-        <div className="relative flex-1 bg-black overflow-hidden" style={{ minHeight: '40vh' }}>
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-cover"
-          />
-          <canvas ref={canvasRef} className="hidden" />
+      <div className="fixed inset-0 bg-black">
+        {/* Full-screen camera */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-full object-cover"
+        />
+        <canvas ref={canvasRef} className="hidden" />
 
-          {/* Overlay */}
-          <div className="absolute inset-0 flex flex-col justify-between p-4">
-            {/* Top bar */}
-            <div className="flex items-center justify-between">
-              <div className="bg-black/50 backdrop-blur-sm px-3 py-2 rounded-lg">
-                <p className="text-white text-sm font-medium flex items-center gap-2">
-                  <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-                  Live
-                </p>
-              </div>
-              <button
-                onClick={stopCamera}
-                className="bg-red-500/80 hover:bg-red-600 backdrop-blur-sm text-white p-2 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Analyze button */}
-            <button
-              onClick={captureAndAnalyze}
-              disabled={analyzing || !streamReady}
-              className="w-full py-4 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all duration-300 flex items-center justify-center gap-2"
-            >
-              {analyzing ? (
-                <>
-                  <Loader className="w-5 h-5 animate-spin" />
-                  Analyzing…
-                </>
-              ) : (
-                <>
-                  <Zap className="w-5 h-5" />
-                  Analyze Questions
-                </>
-              )}
-            </button>
+        {/* ── Top bar ── */}
+        <div className="absolute top-0 left-0 right-0 flex justify-between items-center p-4 pt-safe">
+          <div className="bg-black/60 backdrop-blur-md px-3 py-2 rounded-xl flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${autoMode ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
+            <span className="text-white text-xs font-semibold">
+              {autoMode ? (analyzing ? 'Scanning…' : 'Auto') : 'Standby'}
+            </span>
+            {analyzing && <Loader className="w-3 h-3 text-blue-400 animate-spin" />}
           </div>
+
+          <button
+            onClick={stopCamera}
+            className="bg-black/60 backdrop-blur-md text-white p-2.5 rounded-xl"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* Error banner */}
-        {error && (
-          <div className="bg-red-500/20 border-t border-red-500/50 px-4 py-3">
-            <p className="text-red-300 text-sm">{error}</p>
-          </div>
-        )}
+        {/* ── Answer overlay ── */}
+        {currentAnswer && (
+          <div className="absolute left-4 right-4 bottom-28">
+            <div className="bg-black/80 backdrop-blur-xl rounded-2xl p-4 border border-white/10 shadow-2xl">
+              {/* Primary answer — big and clear */}
+              <div className="flex items-center gap-4 mb-3">
+                <div className="w-16 h-16 bg-green-500 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg shadow-green-500/40">
+                  <span className="text-white text-3xl font-black">{currentAnswer.letter}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-green-400 text-xs font-bold uppercase tracking-wider mb-0.5">
+                    Correct Answer
+                  </p>
+                  <p className="text-white/70 text-xs leading-relaxed line-clamp-2">
+                    {currentAnswer.questionText}
+                  </p>
+                </div>
+              </div>
 
-        {/* Results panel */}
-        {analysis && (
-          <div className="bg-slate-900 border-t border-slate-700 overflow-y-auto" style={{ maxHeight: '55vh' }}>
-            <div className="p-4 space-y-4">
-              {analysis.questions && analysis.questions.length > 0 ? (
-                <>
-                  <h2 className="text-white font-bold text-lg sticky top-0 bg-slate-900 py-2 z-10">
-                    {analysis.questions.length} Question{analysis.questions.length !== 1 ? 's' : ''} Found
-                  </h2>
+              {/* Reasoning */}
+              <p className="text-white/60 text-xs leading-relaxed border-t border-white/10 pt-3">
+                {currentAnswer.reasoning}
+              </p>
 
-                  {analysis.questions.map((q, idx) => (
-                    <div
-                      key={idx}
-                      className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 space-y-3"
+              {/* Multiple questions visible */}
+              {currentAnswer.all && currentAnswer.all.length > 1 && (
+                <div className="flex gap-2 flex-wrap mt-3 pt-3 border-t border-white/10">
+                  {currentAnswer.all.map((a) => (
+                    <span
+                      key={a.num}
+                      className="bg-green-500/20 border border-green-500/40 text-green-300 text-xs font-bold px-2.5 py-1 rounded-lg"
                     >
-                      {/* Question text */}
-                      <p className="text-slate-300 text-sm leading-relaxed">
-                        <span className="font-bold text-blue-400">Q{q.questionNumber}: </span>
-                        {q.questionText}
-                      </p>
-
-                      {/* Options */}
-                      {q.options && q.options.length > 0 && (
-                        <div className="space-y-1">
-                          {q.options.map((opt, i) => (
-                            <div
-                              key={i}
-                              className={`px-3 py-2 rounded-lg text-sm transition-colors ${
-                                opt.letter === q.suggestedAnswer
-                                  ? 'bg-green-500/20 border border-green-500/50 text-green-300'
-                                  : 'bg-slate-700/40 text-slate-400'
-                              }`}
-                            >
-                              <span className="font-bold">{opt.letter})</span> {opt.text}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Answer + reasoning */}
-                      <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3">
-                        <p className="text-green-400 font-bold text-sm mb-1">
-                          ✓ Answer: {q.suggestedAnswer}
-                        </p>
-                        <p className="text-green-300/80 text-xs leading-relaxed">{q.reasoning}</p>
-                      </div>
-
-                      {/* Copy */}
-                      <button
-                        onClick={() => copyToClipboard(q.suggestedAnswer)}
-                        className="w-full py-2 bg-slate-700/50 hover:bg-slate-700 text-slate-300 text-xs rounded-lg transition-colors flex items-center justify-center gap-2"
-                      >
-                        <Copy className="w-3 h-3" />
-                        Copy Answer
-                      </button>
-                    </div>
+                      Q{a.num}: {a.letter}
+                    </span>
                   ))}
-
-                  {analysis.summary && (
-                    <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3">
-                      <p className="text-slate-400 text-xs">
-                        <span className="text-slate-300 font-semibold">Summary: </span>
-                        {analysis.summary}
-                      </p>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-slate-400 text-center py-6">
-                  No questions detected. Try repositioning your camera.
-                </p>
+                </div>
               )}
             </div>
           </div>
         )}
-      </div>
-    </>
-  );
-}
+
+        {/* ── No result yet nudge ── */}
+        {!currentAnswer && autoMode && !analyzing && (
+          <div className="absolute left-4 right-4 bottom-28">
+            <div className="bg-black/60 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-center">
+              <p className="text-white/50 text-sm">Point camera at a question…</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── Error banner ── */}
+        {error && (
+          <div className="absolute left-4 right-4 bottom-28">
+            <div className="bg-red-500/20 border border-red-500/40 rounded-2xl px-4 py-3">
+              <p className="text-red-300 text-sm text-center">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── Start / Stop button ── */}
+        <div className="absolute bottom-0 left-0 right-0 p-4 pb-safe">
+          <button
+            onClick={() => setAutoMode((prev) => !prev)}
+            disabled={!streamReady}
+            className={`w-full py-4 font-bold text-lg rounded-2xl transition-all flex items-center ju
