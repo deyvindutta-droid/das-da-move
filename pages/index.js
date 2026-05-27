@@ -281,7 +281,7 @@ export default function CanvasQuizAnalyzer() {
         </div>
 
         {currentAnswer && (
-          <div className="absolute left-4 right-4 bottom-28">
+          <div className="absolute left-4 right-4 top-20">
             <div className="bg-black/80 backdrop-blur-xl rounded-2xl p-4 border border-white/10 shadow-2xl">
               <div className="flex items-center gap-4 mb-3">
                 <div className="w-16 h-16 bg-green-500 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg shadow-green-500/40">
@@ -309,7 +309,7 @@ export default function CanvasQuizAnalyzer() {
         )}
 
         {!currentAnswer && autoMode && !analyzing && (
-          <div className="absolute left-4 right-4 bottom-28">
+          <div className="absolute left-4 right-4 top-20">
             <div className="bg-black/60 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-center">
               <p className="text-white/50 text-sm">Point camera at a question…</p>
             </div>
@@ -317,7 +317,7 @@ export default function CanvasQuizAnalyzer() {
         )}
 
         {error && (
-          <div className="absolute left-4 right-4 bottom-28">
+          <div className="absolute left-4 right-4 top-20">
             <div className="bg-red-500/20 border border-red-500/40 rounded-2xl px-4 py-3">
               <p className="text-red-300 text-sm text-center">{error}</p>
             </div>
